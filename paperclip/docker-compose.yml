@@ -1,0 +1,85 @@
+name: paperclip
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: paperclip
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [control]
+    restart: unless-stopped
+
+  paperclip:
+    image: ${PAPERCLIP_IMAGE}
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3100"
+      PAPERCLIP_BIND: lan
+      PAPERCLIP_HOME: /paperclip
+      DATABASE_URL: postgres://paperclip:${POSTGRES_PASSWORD}@db:5432/paperclip
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+      PAPERCLIP_PUBLIC_URL: http://localhost:${PAPERCLIP_PORT}
+      PAPERCLIP_ALLOWED_HOSTNAMES: localhost,127.0.0.1
+      BETTER_AUTH_TRUSTED_ORIGINS: http://localhost:${PAPERCLIP_PORT},http://127.0.0.1:${PAPERCLIP_PORT}
+      OPENAI_BASE_URL: http://host.docker.internal:${MLX_PORT}/v1
+      OPENAI_API_KEY: ${LOCAL_LLM_API_KEY}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY}
+      OPENCODE_ALLOW_ALL_MODELS: "true"
+      PAPERCLIP_OPENCODE_SMALL_MODEL: mlx/${MLX_MODEL}
+      PAPERCLIP_OPENCODE_PROVIDERS: '{"mlx":{"npm":"@ai-sdk/openai-compatible","name":"MLX","options":{"baseURL":"http://host.docker.internal:${MLX_PORT}/v1","apiKey":"{env:LOCAL_LLM_API_KEY}"},"models":{"${MLX_MODEL}":{"name":"local-mlx"}}}}'
+      PAPERCLIP_ADAPTER_MODELS: '{"opencode_local":[{"id":"mlx/${MLX_MODEL}","label":"local-mlx"}]}'
+      PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST: http://operator:3199,http://host.docker.internal:${MLX_PORT}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3100/api/health && curl -fsS http://host.docker.internal:${MLX_PORT}/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    ports:
+      - "127.0.0.1:${PAPERCLIP_PORT}:3100"
+    volumes:
+      - ./data/paperclip:/paperclip
+      - ./logs:/logs
+      - ./config:/config:ro
+      - "${HOST_ROOT}/secenv:${HOST_ROOT}/secenv"
+      - "${HOST_ROOT}/secenv:/managed/secenv"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [control]
+    pids_limit: 2048
+    stop_grace_period: 90s
+    restart: unless-stopped
+
+  operator:
+    build: ./operator
+    environment:
+      HOST_ROOT: ${HOST_ROOT}
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN}
+      MANAGE_ON_BOOT: "1"
+      OPERATOR_LOG: /logs/operator.log
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${HOST_ROOT}:${HOST_ROOT}"
+      - ./logs:/logs
+    ports:
+      - "127.0.0.1:${OPERATOR_PORT}:3199"
+    networks: [control]
+    restart: unless-stopped
+
+networks:
+  control:
+    name: paperclip_control

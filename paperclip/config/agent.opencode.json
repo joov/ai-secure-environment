@@ -1,0 +1,16 @@
+{
+  "adapterType": "opencode_local",
+  "adapterConfig": {
+    "cwd": "/managed/secenv",
+    "model": "mlx/mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit",
+    "instructionsFilePath": "/config/SECENV.md",
+    "timeoutSec": 600,
+    "graceSec": 30,
+    "dangerouslySkipPermissions": true,
+    "env": {
+      "LOCAL_LLM_API_KEY": "481165fbab20de79cc975287ee61b8e7ee5f12d3daf3c64e",
+      "OPERATOR_TOKEN": "35c45310f3d8cd8050df7c0292227c4cb265a22f293df5c5",
+      "SECENV_OPERATOR_URL": "http://operator:3199"
+    }
+  }
+}

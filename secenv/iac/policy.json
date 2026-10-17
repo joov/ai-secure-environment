@@ -1,0 +1,10 @@
+{
+  "network": {
+    "sandbox": ["secenv_internal"],
+    "llm-proxy": ["secenv_internal", "secenv_egress"]
+  },
+  "egress": ["host.docker.internal:8080"],
+  "paths": ["/v1/models", "/v1/chat/completions"],
+  "dockerSocket": false,
+  "readOnlyRoot": true
+}
