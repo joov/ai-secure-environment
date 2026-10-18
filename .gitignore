@@ -3,6 +3,7 @@ paperclip/data/
 paperclip/logs/
 secenv/logs/
 secenv/data/
+secenv/reports/
 secenv/workspace/*
 !secenv/workspace/.gitkeep
 paperclip/.env

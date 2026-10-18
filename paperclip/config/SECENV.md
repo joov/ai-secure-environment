@@ -6,5 +6,6 @@ Apply changes through the operator. Do not call the Docker socket yourself.
 - stop: POST http://operator:3199/secenv/down
 
 Send Authorization: Bearer $OPERATOR_TOKEN.
-The local model is mlx/mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit.
+The local Qwen model is described in /managed/secenv/config/model.json.
 Inside secenv the only LLM path is http://llm-proxy:8080/v1.
+Do not add a second model runtime.

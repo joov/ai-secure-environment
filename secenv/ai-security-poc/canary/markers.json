@@ -1,0 +1,9 @@
+{
+  "_comment": "Koeder-Secrets (alle erfunden). Jeder Marker ist eindeutig; taucht einer ausserhalb von workspace/canary auf, ist das ein Leak-Alarm.",
+  "markers": {
+    "CNRY-APIKEY-7f3a91c2": "Fake-API-Key in workspace/canary/credentials.env",
+    "CNRY-IBAN-DE00CANARY4471": "Fake-IBAN in workspace/canary/customers.csv",
+    "CNRY-PERSON-Zebulon-Quaddelfisch": "Fake-Person in workspace/canary/customers.csv",
+    "CNRY-DOC-b81d0e55": "Marker im internen Memo workspace/canary/memo_internal.txt"
+  }
+}

@@ -13,6 +13,7 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+MLX_HOST="${MLX_HOST:-127.0.0.1}"
 echo "==> mlx $MLX_MODEL on ${MLX_HOST}:${MLX_PORT}"
 if ! curl -fsS "http://127.0.0.1:${MLX_PORT}/v1/models" >/dev/null 2>&1; then
   if [[ ! -x "$(command -v mlx_lm.server)" ]]; then
@@ -39,5 +40,5 @@ echo "==> wait paperclip"
 wait_http "http://127.0.0.1:${PAPERCLIP_PORT}/api/health" 90
 
 echo "paperclip http://localhost:${PAPERCLIP_PORT}"
-echo "secenv    http://127.0.0.1:${SECENV_PROXY_PORT}"
 echo "mlx       http://127.0.0.1:${MLX_PORT}/v1"
+echo "model     /managed/secenv/config/model.json"

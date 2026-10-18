@@ -1,16 +1,24 @@
 name: secenv
 
 services:
+  # AI Gateway. LiteLLM replaces the hand-written proxy/proxy.py under the same
+  # service name and container port, so http://llm-proxy:8080/v1 remains the only
+  # LLM path inside secenv_internal. Upstream is the local MLX server on the host.
+  # Rollback: see ai-security-poc/README.md — Dockerfile.proxy and proxy/proxy.py
+  # are kept untouched.
   llm-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile.proxy
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "8080", "--num_workers", "1"]
     environment:
-      MLX_UPSTREAM: http://host.docker.internal:${MLX_PORT}
-      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY}
-      MLX_MODEL: ${MLX_MODEL}
-      PROXY_LOG: /logs/proxy.log
+      LITELLM_MASTER_KEY: sk-${LOCAL_LLM_API_KEY}
+      MLX_UPSTREAM_V1: http://host.docker.internal:${MLX_PORT}/v1
+      MLX_API_KEY: ${MLX_API_KEY:-not-needed}
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      STORE_MODEL_IN_DB: "False"
+      HOME: /tmp
     volumes:
+      - ./ai-security-poc/litellm_config.yaml:/app/config.yaml:ro
       - ./logs:/logs
       - ./config:/config:ro
       - ./iac:/iac:ro
@@ -19,6 +27,76 @@ services:
     networks: [internal, egress]
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - presidio-analyzer
+      - presidio-anonymizer
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 1g
+    restart: unless-stopped
+
+  # PII scanner. Detects personal data; the gateway guardrail calls it on every
+  # request before the prompt reaches the model. No egress.
+  # Image note: the mcr.microsoft.com/presidio-* images still serve their old
+  # tags but no longer receive releases; current builds are published under
+  # ghcr.io/data-privacy-stack. Pin a digest before this leaves PoC status.
+  presidio-analyzer:
+    # Local build: upstream image plus the German spaCy model (de_core_news_lg).
+    build:
+      context: ./ai-security-poc/presidio
+    image: secenv/presidio-analyzer-de:local
+    environment:
+      PORT: "3000"
+    networks: [internal]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    # Two large spaCy models (de + en) are resident at once.
+    mem_limit: 3g
+    restart: unless-stopped
+
+  # PII scanner, second half: applies the masking operators to the detected spans.
+  presidio-anonymizer:
+    image: ghcr.io/data-privacy-stack/presidio-anonymizer:latest
+    environment:
+      PORT: "3000"
+    networks: [internal]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # Policy engine. Serves the deterministic Rego policy that the agent's
+  # before_tool_call hook queries. Policies are mounted read-only; the server
+  # runs without a bundle service, so it needs no egress.
+  opa:
+    image: openpolicyagent/opa:latest-static
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+      # Every policy decision is echoed to the container log, so the ledger in
+      # immudb can be cross-checked against what OPA actually decided.
+      - "--set=decision_logs.console=true"
+      # The *_test.rego suite is for `opa test` on the host; it has no business
+      # being loaded into the running server.
+      - "--ignore=*_test.rego"
+      - "/policies"
+    volumes:
+      - ./ai-security-poc/policies:/policies:ro
+    networks: [internal]
     read_only: true
     tmpfs:
       - /tmp
@@ -29,11 +107,130 @@ services:
     mem_limit: 256m
     restart: unless-stopped
 
+  # Audit ledger. Tamper-evident storage for step-level agent decisions.
+  # Only the gRPC port is enabled; web console and pgsql wire stay off.
+  immudb:
+    image: codenotary/immudb:latest
+    environment:
+      IMMUDB_ADDRESS: 0.0.0.0
+      IMMUDB_PORT: "3322"
+      IMMUDB_ADMIN_PASSWORD: ${IMMUDB_ADMIN_PASSWORD:-immudb}
+      IMMUDB_WEB_SERVER: "false"
+      IMMUDB_PGSQL_SERVER: "false"
+      IMMUDB_AUTH: "true"
+    volumes:
+      # Named volume, not a bind mount: the immudb image runs as its own
+      # non-root uid, which does not match the host uid owning ./data, so a
+      # bind mount fails to initialise with "permission denied". A named
+      # volume inherits ownership from the image.
+      - immudb_data:/var/lib/immudb
+    networks: [internal]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # PoC agent. Routes prompts through the gateway, asks OPA before every tool
+  # call and writes each decision to immudb.
+  #
+  # The stack is operated through the operator, which exposes only up/down — no
+  # `compose exec`. The smoke test therefore runs once at startup and leaves its
+  # output in the bind-mounted ./logs directory, which is readable from outside
+  # the stack. The container stays alive afterwards, so an interactive run
+  #   docker compose exec test-agent python /app/test_agent.py
+  # remains possible wherever exec is available.
+  test-agent:
+    build:
+      context: ./ai-security-poc
+      dockerfile: Dockerfile.agent
+    command:
+      - sh
+      - -c
+      - |
+        for i in $$(seq 1 90); do
+          python -c "import socket; socket.create_connection(('llm-proxy', 8080), 2).close(); socket.create_connection(('opa', 8181), 2).close()" >/dev/null 2>&1 && break
+          sleep 2
+        done
+        python /app/test_agent.py > /logs/smoke_test.log 2>&1
+        echo "EXIT=$$?" >> /logs/smoke_test.log
+        sleep infinity
+    environment:
+      OPENAI_BASE_URL: http://llm-proxy:8080/v1
+      OPENAI_API_KEY: sk-${LOCAL_LLM_API_KEY}
+      MODEL_NAME: ${MLX_MODEL}
+      OPA_URL: http://opa:8181
+      IMMUDB_HOST: immudb
+      IMMUDB_PORT: "3322"
+      IMMUDB_USER: immudb
+      IMMUDB_PASSWORD: ${IMMUDB_ADMIN_PASSWORD:-immudb}
+      IMMUDB_DATABASE: defaultdb
+      AUDIT_LOG: /logs/agent_audit.log
+      WORKSPACE: /workspace
+      # Set to 1 to abort the run when the ledger is unreachable instead of
+      # falling back to the local JSONL file.
+      AUDIT_FAIL_CLOSED: ${AUDIT_FAIL_CLOSED:-0}
+    volumes:
+      - ./ai-security-poc:/app:ro
+      - ./workspace:/workspace
+      - ./logs:/logs
+    networks: [internal]
+    depends_on:
+      - llm-proxy
+      - opa
+      - immudb
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # Secret scanner. Re-scans the agent workspace and the logs every
+  # GITLEAKS_INTERVAL seconds and writes a redacted JSON report to ./reports.
+  # No network at all; inputs are read-only. Findings in workspace/canary are
+  # expected (positive control). Reports never contain the secret values.
+  gitleaks:
+    image: ghcr.io/gitleaks/gitleaks:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          gitleaks dir /scan/workspace --config /etc/gitleaks.toml --redact \
+            --report-format json --report-path /reports/gitleaks_workspace.json \
+            --exit-code 0 --no-banner >/reports/gitleaks_workspace.log 2>&1
+          gitleaks dir /scan/logs --config /etc/gitleaks.toml --redact \
+            --report-format json --report-path /reports/gitleaks_logs.json \
+            --exit-code 0 --no-banner >/reports/gitleaks_logs.log 2>&1
+          date -u +%FT%TZ > /reports/gitleaks_last_run
+          sleep $${GITLEAKS_INTERVAL:-300}
+        done
+    volumes:
+      - ./workspace:/scan/workspace:ro
+      - ./logs:/scan/logs:ro
+      - ./ai-security-poc/gitleaks.toml:/etc/gitleaks.toml:ro
+      - ./reports:/reports
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 512m
+    restart: unless-stopped
+
   sandbox:
     build: ./sandbox
     environment:
       OPENAI_BASE_URL: http://llm-proxy:8080/v1
-      OPENAI_API_KEY: ${LOCAL_LLM_API_KEY}
+      # LiteLLM requires its master key to carry the sk- prefix.
+      OPENAI_API_KEY: sk-${LOCAL_LLM_API_KEY}
       MLX_MODEL: ${MLX_MODEL}
     volumes:
       - ./workspace:/workspace
@@ -49,6 +246,10 @@ services:
     pids_limit: 256
     mem_limit: 512m
     restart: unless-stopped
+
+volumes:
+  immudb_data:
+    name: secenv_immudb_data
 
 networks:
   internal:

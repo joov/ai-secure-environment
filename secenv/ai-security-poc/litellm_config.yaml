@@ -1,0 +1,73 @@
+# secenv AI Gateway — LiteLLM Proxy
+#
+# Replaces the hand-written proxy/proxy.py. Same service name and container port
+# (llm-proxy:8080), so http://llm-proxy:8080/v1 stays the only LLM path inside
+# secenv_internal and existing callers keep working.
+#
+# Upstream is the local MLX server on the host (outside this compose project),
+# reached via host.docker.internal. Only llm-proxy is attached to secenv_egress.
+
+model_list:
+  # Canonical name — identical to what the MLX server reports under /v1/models,
+  # so sandbox/chat.py (model = $MLX_MODEL) keeps working unchanged.
+  - model_name: mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit
+    litellm_params:
+      model: openai/mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit
+      api_base: os.environ/MLX_UPSTREAM_V1
+      api_key: os.environ/MLX_API_KEY
+      # Token rate limiting, enforced per deployment by the LiteLLM router.
+      rpm: 30
+      tpm: 20000
+
+# PII masking in front of the model: every request is run through Presidio
+# Analyzer + Anonymizer before it reaches MLX. default_on means callers cannot
+# opt out by omitting the guardrail from the request body.
+guardrails:
+  - guardrail_name: presidio-pii-mask
+    litellm_params:
+      guardrail: presidio
+      mode: pre_call
+      default_on: true
+      presidio_analyzer_api_base: os.environ/PRESIDIO_ANALYZER_API_BASE
+      presidio_anonymizer_api_base: os.environ/PRESIDIO_ANONYMIZER_API_BASE
+      # German NLP model in the analyzer (see presidio/Dockerfile).
+      presidio_language: de
+      pii_entities_config:
+        PERSON: MASK
+        EMAIL_ADDRESS: MASK
+        PHONE_NUMBER: MASK
+        CREDIT_CARD: MASK
+        IBAN_CODE: MASK
+        IP_ADDRESS: MASK
+        LOCATION: MASK
+        DATE_TIME: MASK
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+  set_verbose: false
+  # Only the models listed above may be addressed; no pass-through routing.
+  enable_preview_features: false
+
+router_settings:
+  # "local-mlx" is an alias, not a second deployment. Declaring it as its own
+  # model_list entry would give it a separate rpm/tpm budget, so a caller could
+  # double the effective rate limit just by switching the model name. As an
+  # alias it shares the single deployment's budget.
+  model_group_alias:
+    local-mlx: mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit
+  routing_strategy: simple-shuffle
+  # No retries: one client request must map to at most one upstream call, so
+  # the rate-limit counters and the audit ledger stay 1:1 with real LLM usage.
+  num_retries: 0
+  timeout: 600
+  allowed_fails: 3
+  cooldown_time: 30
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Second rate-limiting layer: concurrency, not tokens.
+  max_parallel_requests: 4
+  global_max_parallel_requests: 8
+  # No virtual-key database in this PoC — the master key is the only credential.
+  store_model_in_db: false
