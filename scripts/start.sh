@@ -20,9 +20,9 @@ if ! curl -fsS "http://127.0.0.1:${MLX_PORT}/v1/models" >/dev/null 2>&1; then
     echo "mlx_lm.server not found" >&2
     exit 1
   fi
-  echo "==> start mlx_lm.server, log $PAPERCLIP_DIR/logs/mlx.log"
+  echo "==> start mlx_lm.server, log $SECENV_DIR/logs/mlx.log"
   nohup mlx_lm.server --model "$MLX_MODEL" --host "$MLX_HOST" --port "$MLX_PORT" \
-    >"$PAPERCLIP_DIR/logs/mlx.log" 2>&1 &
+    >"$SECENV_DIR/logs/mlx.log" 2>&1 &
   echo $! >"$MLX_PID_FILE"
   echo 1 >"$MLX_MANAGED_FILE"
   wait_http "http://127.0.0.1:${MLX_PORT}/v1/models" 180
@@ -30,15 +30,16 @@ else
   echo "==> mlx already up"
 fi
 
-echo "==> paperclip compose up"
-paperclip_compose up -d --build
-echo "==> wait operator"
-wait_http "http://127.0.0.1:${OPERATOR_PORT}/health" 90
-echo "==> wait secenv proxy"
-wait_http "http://127.0.0.1:${SECENV_PROXY_PORT}/health" 180
-echo "==> wait paperclip"
-wait_http "http://127.0.0.1:${PAPERCLIP_PORT}/api/health" 90
+echo "==> secenv compose up"
+secenv_compose up -d --build --remove-orphans
+echo "==> wait broker"
+wait_http "http://127.0.0.1:${BROKER_PORT}/health" 90
+echo "==> wait hitl"
+wait_http "http://127.0.0.1:${HITL_PORT}/health" 30
+echo "==> wait ledger"
+wait_http "http://127.0.0.1:${LEDGER_PORT}/health" 30
 
-echo "paperclip http://localhost:${PAPERCLIP_PORT}"
-echo "mlx       http://127.0.0.1:${MLX_PORT}/v1"
-echo "model     /managed/secenv/config/model.json"
+echo "broker http://127.0.0.1:${BROKER_PORT}"
+echo "hitl   http://127.0.0.1:${HITL_PORT}"
+echo "ledger http://127.0.0.1:${LEDGER_PORT}"
+echo "mlx    http://127.0.0.1:${MLX_PORT}/v1"

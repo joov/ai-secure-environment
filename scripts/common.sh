@@ -2,34 +2,30 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PAPERCLIP_DIR="$ROOT/paperclip"
 SECENV_DIR="$ROOT/secenv"
-MLX_PID_FILE="$PAPERCLIP_DIR/logs/mlx.pid"
-MLX_MANAGED_FILE="$PAPERCLIP_DIR/logs/mlx.managed"
+MLX_PID_FILE="$SECENV_DIR/logs/mlx.pid"
+MLX_MANAGED_FILE="$SECENV_DIR/logs/mlx.managed"
 
 load_env() {
-  python3 - "$PAPERCLIP_DIR/.env" "$SECENV_DIR/.env" "$ROOT" <<'PY'
+  python3 - "$SECENV_DIR/.env" "$ROOT" <<'PY'
 from pathlib import Path
 import sys
-files = [Path(sys.argv[1]), Path(sys.argv[2])]
-root = sys.argv[3]
-for path in files:
-    lines = path.read_text().splitlines()
-    found = False
-    out = []
-    for line in lines:
-        if line.startswith("HOST_ROOT="):
-            out.append(f'HOST_ROOT="{root}"')
-            found = True
-        else:
-            out.append(line)
-    if not found:
+path = Path(sys.argv[1])
+root = sys.argv[2]
+lines = path.read_text().splitlines() if path.exists() else []
+found = False
+out = []
+for line in lines:
+    if line.startswith("HOST_ROOT="):
         out.append(f'HOST_ROOT="{root}"')
-    path.write_text("\n".join(out) + "\n")
+        found = True
+    else:
+        out.append(line)
+if not found:
+    out.append(f'HOST_ROOT="{root}"')
+path.write_text("\n".join(out) + "\n")
 PY
   set -a
-  # shellcheck disable=SC1091
-  source "$PAPERCLIP_DIR/.env"
   # shellcheck disable=SC1091
   source "$SECENV_DIR/.env"
   set +a
@@ -38,20 +34,16 @@ PY
 
 ensure_dirs() {
   mkdir -p \
-    "$PAPERCLIP_DIR/data/paperclip" \
-    "$PAPERCLIP_DIR/data/postgres" \
-    "$PAPERCLIP_DIR/logs" \
-    "$PAPERCLIP_DIR/config" \
     "$SECENV_DIR/logs" \
+    "$SECENV_DIR/data" \
+    "$SECENV_DIR/secrets/agent-a" \
+    "$SECENV_DIR/secrets/agent-b" \
     "$SECENV_DIR/workspace" \
-    "$SECENV_DIR/config" \
-    "$SECENV_DIR/iac" \
-    "$SECENV_DIR/data"
-  chmod 1777 "$PAPERCLIP_DIR/logs" "$SECENV_DIR/logs" "$SECENV_DIR/workspace"
-}
-
-paperclip_compose() {
-  docker compose --project-name paperclip --env-file "$PAPERCLIP_DIR/.env" -f "$PAPERCLIP_DIR/docker-compose.yml" "$@"
+    "$SECENV_DIR/policies"
+  chmod 1777 "$SECENV_DIR/logs" "$SECENV_DIR/data" "$SECENV_DIR/secrets" "$SECENV_DIR/workspace"
+  if [[ ! -f "$SECENV_DIR/workspace/notes.txt" ]]; then
+    printf 'hello from workspace\n' >"$SECENV_DIR/workspace/notes.txt"
+  fi
 }
 
 secenv_compose() {

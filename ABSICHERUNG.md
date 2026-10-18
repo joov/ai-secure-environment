@@ -2,7 +2,7 @@
 
 Stand: 2026-10-18. Zielbild: Agenten erledigen Arbeitsabläufe, andere Agenten oder Menschen stoßen sie an, der Mensch ist nur noch Human-in-the-Loop. Bewertung gegen diesen Nutzen, nicht gegen einen vollständigen Kontrollkatalog.
 
-Der jetzige secenv-PoC hat die Reihenfolge verkehrt herum begonnen: Gateway, PII-Maskierung und Ledger zuerst, Identität zuletzt. Ohne Identität bleibt jede spätere Kontrolle eine Aussage über einen anonymen Aufrufer.
+Der erste PoC hat mit Gateway und Maskierung angefangen. Der laufende Stand setzt die Durchsetzung an den Broker. Was davon erfüllt ist, steht in `STATUS.md`.
 
 ## 1. Identität des Aufrufers
 
@@ -22,7 +22,7 @@ Zweitwichtigster Nutzen, und der einzige Teil, den der PoC schon belegt. Ein Age
 - Egress nur zu benannten Zielen. Das Netz erzwingt das, nicht nur die Policy.
 - Die Prüfung sitzt vor der Wirkung, nicht im Prompt.
 
-Das hält einen kompromittierten Agenten klein, auch wenn das Modell lügt. Intent-Prüfung ("passt das zum Auftrag?") ist dieselbe Stelle, nur mit dem ursprünglichen Auftrag als Input. Ohne sie blockt die Policy Technik, nicht Zweckentfremdung.
+Das hält einen kompromittierten Agenten klein, auch wenn das Modell lügt. Der Auftrag ist keine Formulierung, die ein Modell auslegt. Er ist eine Liste erlaubter Aktionen, Pfade, Ziele und Werkzeuge. OPA erlaubt nur die Schnittmenge aus dieser Liste und der technischen Regel. Der Agent kann die Liste nicht erweitern. Eine technisch bekannte Aktion außerhalb der Liste ist Deny.
 
 ## 3. Human-in-the-Loop nur an den wenigen Stellen, die nicht automatisch dürfen
 
@@ -81,7 +81,7 @@ Mandantentrennung, Modell-Signierung, SBOM und TEE lösen ein anderes Problem: V
 4. Ledger, das diese ID und den Auftrag mitschreibt.
 5. Danach eigene LLM-Keys. PII- und Secrets-Maskierung bleiben zweitrangig.
 
-Der bestehende PoC hat 2 und einen Teil von 4 und 6. Er hat 1, 3 und 5 nicht. Dort liegt der Abstand zum Ziel, nicht bei einem weiteren Gateway.
+Der Abstand zum Ziel ist nicht ein weiteres Gateway. Er ist die Bindung an einen echten Nutzer. Der lokale Auftrag ist schon eine Liste. Wer sie später pflegt, steht in `PROFESSIONALIZATION.md`. Der Ist-Stand steht in `STATUS.md`.
 
 ## Docker-Skizze der ersten Testumgebung
 
@@ -96,12 +96,12 @@ Nur der Broker hängt an beiden und als Einziger an einem dritten Netz `egress`.
 
 | Dienst | Rolle | Darf |
 |---|---|---|
-| `registry` | Vergibt pro Agent eine ID, Owner, Auftrag und ein Token. Das Token liegt in einem Volume, das nur dieser Container sieht. | kein Egress |
+| `registry` | Vergibt pro Agent eine ID, einen Owner und einen Auftrag als Liste. Das Token liegt in einem Volume, das nur dieser Container sieht. | kein Egress |
 | `agent-*` | Ein Container pro Rolle. Read-only, kein Docker-Socket, eigenes Token, gemeinsamer Workspace nur lesend ausser der Broker schreibt. | nur `broker` |
 | `broker` | Einziger Prozess, der Tools ausführt und das Modell aufruft. Prüft Token, fragt OPA, holt bei Bedarf Freigabe, schreibt Ledger, dann Wirkung. | `control`, `agents`, `egress` nur zur Allowlist |
-| `opa` | Default-Deny. Input ist Agent-ID, Auftrag und die konkrete Aktion. | nur `control` |
+| `opa` | Default-Deny. Input ist Agent-ID, die Auftragsliste und die konkrete Aktion. Erlaubt ist nur die Schnittmenge. | nur `control` |
 | `hitl` | Kleine lokale Freigabe. Timeout und Ablehnung sind Deny. Gilt für Geld, Aussenwirkung, Rechte, Löschen, neuen Agenten. | nur `control`, UI auf `127.0.0.1` |
-| `ledger` | immudb. Jeder Eintrag trägt Agent-ID, Owner, Auftrag, Run-ID, Entscheidung, Aktion. | nur `control` |
+| `ledger` | Hash-Kette. Jeder Eintrag trägt Agent-ID, Owner, Auftrag, Run-ID, Entscheidung, Aktion. immudb ist der spätere Tausch, nicht die erste Fassung. | nur `control` |
 
 Der Broker ist die ganze Durchsetzung. Ein Agent, der am Broker vorbei will, hat kein Netz dafür. Ein gefälschtes Token scheitert am Register, weil das Volume nicht geteilt ist.
 
@@ -117,3 +117,4 @@ Erster Test, sonst ist die Skizze nichts wert:
 2. Agent A ruft Shell oder einen fremden Host auf. OPA lehnt ab, Ledger zeigt A.
 3. Agent A legt das Token von B vor. Register lehnt ab.
 4. Agent A will nach aussen senden. HITL blockt, Timeout ist Deny, nichts geht raus.
+5. Eine technisch bekannte Aktion, die nicht in der Auftragsliste steht, wird abgelehnt.

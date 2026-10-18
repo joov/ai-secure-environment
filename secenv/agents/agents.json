@@ -1,0 +1,22 @@
+[
+  {
+    "id": "agent-a",
+    "owner": "alice",
+    "task": {
+      "actions": ["read_file", "llm_chat", "call_agent", "mcp_call", "egress"],
+      "paths": ["/workspace/notes.txt"],
+      "targets": ["agent-b"],
+      "tools": ["ping"]
+    }
+  },
+  {
+    "id": "agent-b",
+    "owner": "bob",
+    "task": {
+      "actions": ["read_file"],
+      "paths": ["/workspace/notes.txt"],
+      "targets": [],
+      "tools": []
+    }
+  }
+]
