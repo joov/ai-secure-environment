@@ -2,6 +2,8 @@
 
 Lokale Testumgebung für Agenten, die nicht der Nutzer sind. Der Broker ist die einzige Wirkung. OPA entscheidet vorher. Der Auftrag ist eine Liste, keine Formulierung.
 
+Das Repo ist für Apple Silicon konzipiert: Ein lokales LLM läuft unter `mlx_lm`. Alle übrigen Komponenten laufen als Container in `docker compose`.
+
 ## Dokumente
 
 | Datei | Inhalt |
